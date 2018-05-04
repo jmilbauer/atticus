@@ -9,12 +9,14 @@ import urllib2, requests
 import os, sys
 import argparse
 import time
+import nltk.data
 
 ERROR = 1
 INFO = 2
 MONITOR = 3
 DEBUG = 4
 debug = None
+FILE_STORAGE_PATH = './files/'
 
 class Debugger(object):
     """
@@ -38,6 +40,27 @@ class Debugger(object):
             elif flag == DEBUG:
                 print("DEBUG\t {}".format(message))
             sys.stdout.flush()
+
+def find_label(text, sentences):
+    """
+    Given a body of text from a judicial decision (BIA), come up with a label
+    """
+
+    # positive_regexes =  [ "appeal.*dismissed"
+    #                     , "appeal.*denied"
+    #                     , "appeal.*rejected"
+    #                     ]
+
+    order_sentence = []
+    for sentence in sentences:
+        found_order = False
+        for word in sentence.split():
+            if word.lower() == "order:":
+                found_order = True
+            if found_order:
+                order_sentence.append(word)
+
+    return order_sentence
 
 def pdf_to_text(path):
     """
@@ -99,10 +122,10 @@ def get_bia_pdfs():
 
         my_path = os.path.abspath(__file__)
         my_dir = os.path.split(my_path)[0]
-        abs_path = os.path.join(my_dir, './files/{}.pdf'.format(name))
+        abs_path = os.path.join(my_dir, '{}{}.pdf'.format(FILE_STORAGE_PATH, name))
         paths.append(abs_path)
 
-        with open('./files/{}.pdf'.format(name), 'wb') as fp:
+        with open('{}{}.pdf'.format(FILE_STORAGE_PATH, name), 'wb') as fp:
             fp.write(response.content)
             debug.log(MONITOR, "Downloaded: {}.pdf".format(name))
 
@@ -115,19 +138,50 @@ def main():
     """
     Begin by downloading pdfs from the BIA and storing paths to them.
     """
-    paths = get_bia_pdfs()
+    #get_bia_pdfs(FILE_STORAGE_PATH)
+
+    my_path = os.path.abspath(__file__)
+    my_dir = os.path.split(my_path)[0]
+    file_dir = os.path.join(my_dir, FILE_STORAGE_PATH)
+    rel_paths = os.listdir(file_dir)
+    paths = [os.path.join(file_dir, rel_path) for rel_path in rel_paths]
 
     """
     Next, we grab the raw text contained in those pdfs and store them in their own files.
     """
-    for i, path in enumerate(paths):
-        text = pdf_to_text(path)
-        with open('./files/{}'.format(i), 'wb') as fp:
-            fp.write(text)
+    # for i, path in enumerate(paths):
+    #     if path[-4:] == '.pdf':
+    #         debug.log(MONITOR, "Extracting data at {}".format(path))
+    #         text = pdf_to_text(path)
+    #         with open('{}{}.txt'.format(file_dir, i), 'wb') as fp:
+    #             fp.write(text)
+    #             debug.log(MONITOR, "Read text from pdf.")
 
     """
     Next, for each text file, we choose a label, and then tokenize the text + label
     """
+
+    debug.log(INFO, "Converting text into sentences...")
+    start = time.time()
+    paths = [os.path.join(file_dir, rel_path) for rel_path in os.listdir(file_dir)]
+    tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
+    labeled_sentences = []
+    for i, path in enumerate(paths):
+        if path[-4:] == '.txt':
+            debug.log(MONITOR, "Handling text at {}".format(path))
+            with open(path, 'rb') as fp:
+
+                text = fp.read().decode('utf8').strip()
+                sentences = tokenizer.tokenize(text)
+                debug.log(DEBUG, "Got sentences: \n{}".format(sentences))
+
+                label = " ".join(find_label(text, sentences)).encode('utf-8')
+                filename = os.path.split(path)[1]
+                debug.log(MONITOR, "Label for {}: {}".format(filename, label))
+
+                labeled_sentences += map(lambda x: (x, label), sentences)
+
+    debug.log(INFO, "Finished grabbing sentences. Count: {}. Time: {}".format(len(labeled_sentences), time.time() - start))
 
     """
     Finally, we build a tsv file of sentence-label pairs.
